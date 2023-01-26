@@ -16,6 +16,8 @@ import { DatabaseModule } from "./db/database.module";
         POSTGRES_DB: Joi.string().required(),
         PORT: Joi.string().required(),
         FRONTEND_URL: Joi.string().required(),
+        JWT_ACCESS_TOKEN_SECRET: Joi.string().required(),
+        JWT_ACCESS_TOKEN_EXPIRATION_TIME: Joi.string().required(),
       }),
     }),
     DatabaseModule,

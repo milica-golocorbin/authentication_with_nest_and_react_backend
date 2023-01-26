@@ -128,12 +128,14 @@ npm run start:dev
 ```
 git add .
 
-git commit -m "initial configuration"
+git commit -m "first commit"
 
-git push
+git remote add origin https://github.com/milica-golocorbin/authentication_with_nest_and_react_backend.git
+
+git push -u origin main
 ```
 
-# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - PASSPORT JWT
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - PASSPORT
 
 ## Create **accounts** folder, which will group our authentication, email verification and users as context. Each one of those will be in separate folders.
 
@@ -239,7 +241,6 @@ export class UsersService {
   constructor(@InjectRepository(User) private usersRepo: Repository<User>) {}
 
   async getUserByEmail(email: string): Promise<User> | null {
-    // Finds first entity by email. If entity was not found in the database, it returns null.
     return await this.usersRepo.findOne({ where: { email } });
   }
 
@@ -249,7 +250,6 @@ export class UsersService {
       ...createUserDto,
       password: hashedPassword,
     });
-    // Saves a entity in the database. If entity does not exist in the database then inserts, otherwise updates.
     return await this.usersRepo.save(newUser);
   }
 }
@@ -324,7 +324,6 @@ export class AuthenticationService {
   ) {}
 
   public async registerUser(registerUserDto: RegisterUserDto) {
-    // checking to see if user already exists; this function returns either null or User
     const user = await this.usersService.getUserByEmail(registerUserDto.email);
 
     if (!user?.hasOwnProperty("email")) {
@@ -340,7 +339,6 @@ export class AuthenticationService {
 
   public async getAuthenticatedUser(email: string, password: string) {
     const user = await this.usersService.getUserByEmail(email);
-    // checking if user does not already exists;
     if (!user) {
       throw new HttpException(
         "Wrong credentials provided.",
@@ -348,7 +346,6 @@ export class AuthenticationService {
       );
     }
     // TODO: CHECK IF USER HAS VERIFIED HIS EMAIL
-    // checking if password is correct
     const isPasswordMatching = await bcrypt.compare(password, user.password);
     if (!isPasswordMatching) {
       throw new HttpException(
@@ -484,6 +481,248 @@ export class AuthenticationController {
 ```
 
 **Do not forget to add controller to AuthenticationModule's controllers array.**
+
+## Test with Postman
+
+## Push to Github
+
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - PASSPORT JWT
+
+We will use JWT to restrict certain parts of the application only to authenticated users. We don’t want users to have to authenticate on every request. Instead, we will use JWT to let users indicate that they have already logged in successfully. JWT will be stored in a cookie.
+
+JWT is a string that will be created on the server, with secret key. Thanks to that, only we will be able to decode it. We will send JWT to users, when they login. And that JWT will be sent back to the server on every request. If the token is valid, we will trust the identity of the user.
+
+## Integrating authentication with Passport JWT
+
+```
+npm install @nestjs/jwt passport-jwt cookie-parser
+
+npm install -D @types/passport-jwt @types/cookie-parser
+```
+
+We will add environment variables to .env file. We will use: **crypto.randomBytes(32).toString("hex")** to generate random key for JWT_ACCESS_TOKEN_SECRET. And we will set JWT_ACCESS_TOKEN_EXPIRATION_TIME to 1800s (30 minutes).
+
+**.env**
+
+```
+JWT_ACCESS_TOKEN_SECRET
+JWT_ACCESS_TOKEN_EXPIRATION_TIME=1800
+```
+
+**app.module.ts**
+
+```
+@Module({
+  imports: [
+      validationSchema: Joi.object({
+        ...
+        JWT_ACCESS_TOKEN_SECRET: Joi.string().required(),
+        JWT_ACCESS_TOKEN_EXPIRATION_TIME: Joi.string().required(),
+      }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+## Generating Tokens
+
+In order to create JWT we will need access to JwtService. And to get access to it, we need to add JwtModule to AuthenticationModule's imports array.
+
+**authentication/authentication.module.ts**
+
+```
+import { JwtModule } from "@nestjs/jwt";
+
+@Module({
+  imports: [JwtModule.register({})],
+})
+export class AuthenticationModule {}
+```
+
+**authentication/authentication.service.ts**
+
+Add JwtService to our constructor to be able to sign the tokens.
+
+```
+import { JwtService } from "@nestjs/jwt";
+
+@Injectable()
+export class AuthenticationService {
+  constructor(
+    private jwtService: JwtService
+  ) {}
+
+  public createAccessToken(userId: number) {
+    const payload = { userId };
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get("JWT_ACCESS_TOKEN_SECRET"),
+      expiresIn: `${this.configService.get(
+        "JWT_ACCESS_TOKEN_EXPIRATION_TIME",
+      )}s`,
+    });
+    const cookie = `Authentication=${accessToken}; HttpOnly; Path=/; Max-Age=${this.configService.get(
+      "JWT_ACCESS_TOKEN_EXPIRATION_TIME",
+    )}`;
+
+    return cookie;
+  }
+}
+```
+
+**authentication/authentication.controller.ts**
+
+We need to send the token created by the createAccessToken method when user logs in successfully.
+
+```
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+
+  @UseGuards(LocalAuthenticationGuard)
+  @HttpCode(200)
+  @Post("login")
+  async login(@Req() request: RequestWithUser) {
+    const user = request.user;
+    const accessTokenCookie = this.authenticationService.createAccessToken(
+      user.id,
+    );
+    request.res.setHeader("Set-Cookie", accessTokenCookie);
+    return user;
+  }
+}
+```
+
+## Reading Tokens
+
+To to able to read tokens from the cookie, first we need to add **cookie-parser**.
+
+**main.ts**
+
+```
+import * as cookieParser from "cookie-parser";
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
+  const port = configService.get<number>("PORT") ?? 3000;
+
+  app.use(cookieParser());
+
+  ...
+}
+bootstrap();
+```
+
+## PASSPORT STRATEGY - JWT
+
+Reading token from the cookie header with the help of Passport JwtStrategy. When we successfully access the token, we use the id of the user that is encoded inside the cookie. With it, we can get the whole user data through the userService.getUserById method, which we will add in, after the strategy.
+
+**authentication/passport/strategies/jwt.strategy.ts**
+
+```
+import { Request } from "express";
+import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+import { UsersService } from "src/accounts/users/users.service";
+import { User } from "src/accounts/users/user.entity";
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
+  constructor(
+    private configService: ConfigService,
+    private usersService: UsersService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: Request) => {
+          if (!request?.cookies?.Authentication) {
+            throw new HttpException("Token expired.", HttpStatus.NOT_FOUND);
+          }
+          return request?.cookies?.Authentication;
+        },
+      ]),
+      secretOrKey: configService.get("JWT_ACCESS_TOKEN_SECRET"),
+    });
+  }
+
+  async validate(payload: { userId: number }): Promise<User> {
+    const user = await this.usersService.getUserById(payload.userId);
+    return user;
+  }
+}
+```
+
+Add JwtStrategy to AuthenticationModule's providers array.
+
+**authentication/authentication.module.ts**
+
+```
+import { JwtStrategy } from "./passport/strategies/jwt.strategy";
+
+@Module({
+  ...
+  providers: [AuthenticationService, LocalStrategy, JwtStrategy],
+  ...
+export class AuthenticationModule {}
+```
+
+**users/users.service.ts**
+
+```
+import { HttpException, HttpStatus } from "@nestjs/common";
+
+@Injectable()
+export class UsersService {
+  ...
+  async getUserById(id: number) {
+    const user = await this.usersRepo.findOne({ where: { id } });
+    if (!user) {
+      throw new HttpException("User does not exist.", HttpStatus.NOT_FOUND);
+    }
+    return user;
+  }
+```
+
+## JWT GUARD
+
+Requiring authentication from our users.
+
+**authentication/guards/jwt-authentication.guard.ts**
+
+```
+import { Injectable } from "@nestjs/common";
+import { AuthGuard } from "@nestjs/passport";
+
+@Injectable()
+export class JwtAuthenticationGuard extends AuthGuard("jwt") {}
+```
+
+## Logging out users
+
+**authentication/authentication.controller.ts**
+
+```
+import { JwtAuthenticationGuard } from "./passport/guards/jwt-authentication.guard";
+
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+  ...
+
+  @UseGuards(JwtAuthenticationGuard)
+  @HttpCode(204)
+  @Post("logout")
+  async logout(@Req() request: RequestWithUser) {
+    request.res.setHeader("Set-Cookie", [
+      "Authentication=; HttpOnly; Path=/; Max-Age=0",
+      "Refresh=; HttpOnly; Path=/; Max-Age=0",
+    ]);
+  }
+}
+```
 
 ## Test with Postman
 

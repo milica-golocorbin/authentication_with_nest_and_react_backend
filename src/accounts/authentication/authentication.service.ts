@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus } from "@nestjs/common";
 import { Injectable } from "@nestjs/common/decorators";
 import { ConfigService } from "@nestjs/config";
+import { JwtService } from "@nestjs/jwt";
 import { UsersService } from "../users/users.service";
 import { RegisterUserDto } from "./register-user.dto";
 import * as bcrypt from "bcrypt";
@@ -9,6 +10,7 @@ import * as bcrypt from "bcrypt";
 export class AuthenticationService {
   constructor(
     private configService: ConfigService,
+    private jwtService: JwtService,
     private usersService: UsersService,
   ) {}
 
@@ -47,4 +49,24 @@ export class AuthenticationService {
     }
     return user;
   }
+
+  // ACCESS TOKEN AND REFRESH TOKEN GENERATION START
+
+  // creating access token and saving it to the cookie
+  public createAccessToken(userId: number) {
+    const payload = { userId };
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get("JWT_ACCESS_TOKEN_SECRET"),
+      expiresIn: `${this.configService.get(
+        "JWT_ACCESS_TOKEN_EXPIRATION_TIME",
+      )}s`,
+    });
+    const cookie = `Authentication=${accessToken}; HttpOnly; Path=/; Max-Age=${this.configService.get(
+      "JWT_ACCESS_TOKEN_EXPIRATION_TIME",
+    )}`;
+
+    return cookie;
+  }
+
+  // ACCESS TOKEN AND REFRESH TOKEN GENERATION END
 }

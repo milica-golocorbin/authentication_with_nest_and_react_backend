@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { User } from "./user.entity";
@@ -12,6 +12,15 @@ export class UsersService {
   async getUserByEmail(email: string): Promise<User> | null {
     // Finds first entity by email. If entity was not found in the database, it returns null.
     return await this.usersRepo.findOne({ where: { email } });
+  }
+
+  //  (called by JwtStrategy)
+  async getUserById(id: number) {
+    const user = await this.usersRepo.findOne({ where: { id } });
+    if (!user) {
+      throw new HttpException("User does not exist.", HttpStatus.NOT_FOUND);
+    }
+    return user;
   }
 
   async createUser(createUserDto: CreateUserDto): Promise<User> {
