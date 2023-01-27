@@ -68,5 +68,20 @@ export class AuthenticationService {
     return cookie;
   }
 
+  // creating refresh token and saving it to the cookie
+  public createRefreshToken(userId: number) {
+    const payload = { userId };
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.configService.get("JWT_REFRESH_TOKEN_SECRET"),
+      expiresIn: `${this.configService.get(
+        "JWT_REFRESH_TOKEN_EXPIRATION_TIME",
+      )}s`,
+    });
+    const cookie = `Refresh=${refreshToken}; HttpOnly; Path=/; Max-Age=${this.configService.get(
+      "JWT_REFRESH_TOKEN_EXPIRATION_TIME",
+    )}`;
+    return { cookie, refreshToken };
+  }
+
   // ACCESS TOKEN AND REFRESH TOKEN GENERATION END
 }

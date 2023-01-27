@@ -408,6 +408,7 @@ import { LocalStrategy } from "./passport/strategies/local.strategy";
 ## GUARDS - AUTHORIZATION
 
 Guards determine whether a given request will be handled by the route handler or not, depending on certain conditions.
+Applying LocalStrategy by requiring email and password from our users.
 
 **authentication/passport/guards/local.strategy.ts**
 
@@ -500,7 +501,7 @@ npm install @nestjs/jwt passport-jwt cookie-parser
 npm install -D @types/passport-jwt @types/cookie-parser
 ```
 
-We will add environment variables to .env file. We will use: **crypto.randomBytes(32).toString("hex")** to generate random key for JWT_ACCESS_TOKEN_SECRET. And we will set JWT_ACCESS_TOKEN_EXPIRATION_TIME to 1800s (30 minutes).
+We will add two new environment variables to .env file. We will use: **crypto.randomBytes(32).toString("hex")** to generate random key for JWT_ACCESS_TOKEN_SECRET. And we will set JWT_ACCESS_TOKEN_EXPIRATION_TIME to 1800s (30 minutes).
 
 **.env**
 
@@ -688,7 +689,7 @@ export class UsersService {
 
 ## JWT GUARD
 
-Requiring authentication from our users.
+Applying JwtStrategy by requiring authentication from our users.
 
 **authentication/guards/jwt-authentication.guard.ts**
 
@@ -700,7 +701,7 @@ import { AuthGuard } from "@nestjs/passport";
 export class JwtAuthenticationGuard extends AuthGuard("jwt") {}
 ```
 
-## Logging out users
+## Creating log out endpoint
 
 **authentication/authentication.controller.ts**
 
@@ -716,14 +717,287 @@ export class AuthenticationController {
   @HttpCode(204)
   @Post("logout")
   async logout(@Req() request: RequestWithUser) {
-    request.res.setHeader("Set-Cookie", [
-      "Authentication=; HttpOnly; Path=/; Max-Age=0",
-      "Refresh=; HttpOnly; Path=/; Max-Age=0",
-    ]);
+    request.res.setHeader("Set-Cookie", "Authentication=; HttpOnly; Path=/; Max-Age=0");
   }
 }
 ```
 
 ## Test with Postman
+
+## Push to Github
+
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - REFRESH JWT
+
+On successful login, we will create two separate JWT tokens. One is an access token, valid for 30 minutes. The other is a refresh token that has an expiry of one week.
+Both tokens will be placed in a cookie. Access token is for authentication, while making requests. Once the API states that the access token has expired, the user needs to perform a refresh.
+To refresh the token, the user needs to call a separate endpoint, called /refresh. This time, the refresh token is taken from the cookies and sent to the API. If it is valid and not expired, the user receives the new access token. Thanks to that, there is no need to provide the username and password again.
+When we created User entity we added field refreshJwtToken, that can be optional. When user successfully logs in, we will save refresh token in the database, and when user logs out, we will remove it from the database.
+
+We will add two new environment variables to .env file. We will use: **crypto.randomBytes(32).toString("hex")** to generate random key for JWT_REFRESH_TOKEN_SECRET. And we will set JWT_REFRESH_TOKEN_EXPIRATION_TIME to 604800s (7 days).
+
+**.env**
+
+```
+JWT_REFRESH_TOKEN_SECRET
+JWT_REFRESH_TOKEN_EXPIRATION_TIME=604800
+```
+
+**app.module.ts**
+
+```
+@Module({
+  imports: [
+      validationSchema: Joi.object({
+        ...
+        JWT_REFRESH_TOKEN_SECRET: Joi.string().required(),
+        JWT_REFRESH_TOKEN_EXPIRATION_TIME: Joi.string().required(),
+      }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+## Generating Tokens
+
+**authentication/authentication.service.ts**
+
+```
+  public createRefreshToken(userId: number) {
+    const payload = { userId };
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.configService.get("JWT_REFRESH_TOKEN_SECRET"),
+      expiresIn: `${this.configService.get(
+        "JWT_REFRESH_TOKEN_EXPIRATION_TIME",
+      )}s`,
+    });
+    const cookie = `Refresh=${refreshToken}; HttpOnly; Path=/; Max-Age=${this.configService.get(
+      "JWT_REFRESH_TOKEN_EXPIRATION_TIME",
+    )}`;
+    return { cookie, refreshToken };
+  }
+```
+
+## Saving refresh token in database
+
+Before going into the controller and changing the login function to include our refresh token, as well, on successful login, we will add new method to UsersService. This method will hash refresh token created by our AuthenticationService, and save it to the database.
+
+**users/users.service.ts**
+
+```
+  async saveRefreshToken(refreshToken: string, userId: number) {
+    const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+    return await this.usersRepo.update(userId, {
+      refreshJwtToken: hashedRefreshToken,
+    });
+  }
+```
+
+**authentication/authentication.controller.ts**
+
+We have to add UsersService to constructor.
+
+```
+import { UsersService } from "../users/users.service";
+
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+  constructor(
+  readonly authenticationService: AuthenticationService,
+  readonly usersService: UsersService,
+  ) {}
+
+  @UseGuards(LocalAuthenticationGuard)
+  @HttpCode(200)
+  @Post("login")
+  async login(@Req() request: RequestWithUser) {
+    const user = request.user;
+    const accessTokenCookie = this.authenticationService.createAccessToken(
+      user.id,
+    );
+    const { cookie: refreshTokenCookie, refreshToken } =
+      this.authenticationService.createRefreshToken(user.id);
+    await this.usersService.saveRefreshToken(refreshToken, user.id);
+    request.res.setHeader("Set-Cookie", [
+      accessTokenCookie,
+      refreshTokenCookie,
+    ]);
+    return user;
+  }
+```
+
+## Reading Tokens
+
+## PASSPORT STRATEGY - REFRESH JWT
+
+Reading token from the cookie header with the help of Passport JwtRefreshStrategy. When we successfully access the token, we use the id of the user that is encoded inside the cookie. With it, we can get the whole user data through the userService.getUserByRefreshToken method, which we will add in, after the strategy.
+
+**authentication/passport/strategies/jwt-refresh.strategy.ts**
+
+```
+import { Request } from "express";
+import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { UsersService } from "src/accounts/users/users.service";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+import { User } from "../../../users/user.entity";
+
+@Injectable()
+export class JwtRefreshTokenStrategy extends PassportStrategy(
+  Strategy,
+  "jwt-refresh-token",
+) {
+  constructor(
+    private configService: ConfigService,
+    private usersService: UsersService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: Request) => {
+          if (!request?.cookies?.Refresh) {
+            throw new HttpException("Token expired.", HttpStatus.NOT_FOUND);
+          }
+          return request?.cookies?.Refresh;
+        },
+      ]),
+      secretOrKey: configService.get("JWT_REFRESH_TOKEN_SECRET"),
+      passReqToCallback: true,
+    });
+  }
+
+  async validate(request: Request, payload: { userId: number }): Promise<User> {
+    const refreshToken = request.cookies?.Refresh;
+    const user = await this.usersService.getUserByRefreshToken(
+      refreshToken,
+      payload.userId,
+    );
+    return user;
+  }
+}
+```
+
+Add JwtRefreshTokenStrategy to AuthenticationModule's providers array.
+
+**authentication/authentication.module.ts**
+
+```
+import { JwtRefreshTokenStrategy } from "./passport/strategies/jwt-refresh.strategy";
+
+@Module({
+  ...
+  providers: [AuthenticationService, LocalStrategy, JwtStrategy, JwtRefreshTokenStrategy],
+  ...
+export class AuthenticationModule {}
+```
+
+**users/users.service.ts**
+
+```
+import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { User } from "./user.entity";
+import { CreateUserDto } from "./create-user.dto";
+import * as bcrypt from "bcrypt";
+
+@Injectable()
+export class UsersService {
+  ...
+  public async getUserByRefreshToken(refreshToken: string, userId: number) {
+    const user = await this.getUserById(userId);
+    const isRefreshTokenMatching = await bcrypt.compare(
+      refreshToken,
+      user.refreshJwtToken,
+    );
+    if (!isRefreshTokenMatching) {
+      throw new HttpException("Token expired.", HttpStatus.BAD_REQUEST);
+    }
+    return user;
+  }
+}
+```
+
+## JWT REFRESH GUARD
+
+Applying JwtRefreshTokenStrategy by requiring refresh token from our users.
+
+**authentication/guards/jwt-refresh-authentication.guard.ts**
+
+```
+import { Injectable } from "@nestjs/common";
+import { AuthGuard } from "@nestjs/passport";
+
+@Injectable()
+export class JwtRefreshAuthenticationGuard extends AuthGuard(
+  "jwt-refresh-token",
+) {}
+```
+
+## Creating refresh endpoint
+
+**authentication/authentication.controller.ts**
+
+```
+import { Get } from "@nestjs/common";
+import { JwtRefreshAuthenticationGuard } from "./passport/guards/jwt-refresh-authentication.guard";
+
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+  ...
+  @UseGuards(JwtRefreshAuthenticationGuard)
+  @Get("refresh")
+  refresh(@Req() request: RequestWithUser) {
+    const accessTokenCookie = this.authenticationService.createAccessToken(
+      request.user.id,
+    );
+    request.res.setHeader("Set-Cookie", accessTokenCookie);
+    return request.user;
+  }
+}
+```
+
+## Changing logout function in controller
+
+We will add after removeRefreshToken to our UsersService, that will clear refreshJwtToken from the database.
+
+**authentication/authentication.controller.ts**
+
+```
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+  ...
+  @UseGuards(JwtAuthenticationGuard)
+  @HttpCode(204)
+  @Post("logout")
+  async logout(@Req() request: RequestWithUser) {
+    await this.usersService.removeRefreshToken(request.user.id);
+    request.res.setHeader("Set-Cookie", [
+      "Authentication=; HttpOnly; Path=/; Max-Age=0",
+      "Refresh=; HttpOnly; Path=/; Max-Age=0",
+    ]);
+  }
+```
+
+**users/users.service.ts**
+
+```
+@Injectable()
+export class UsersService {
+  ...
+  async removeRefreshToken(userId: number) {
+    return await this.usersRepo.update(userId, {
+      refreshJwtToken: null,
+    });
+  }
+}
+```
+
+## Test with Postman
+
+Change the JWT_ACCESS_TOKEN_EXPIRATION_TIME and JWT_REFRESH_TOKEN_EXPIRATION_TIME for testing to see Passport strategies in action.
 
 ## Push to Github
