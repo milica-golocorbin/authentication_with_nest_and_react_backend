@@ -7,9 +7,15 @@ import { JwtRefreshTokenStrategy } from "./passport/strategies/jwt-refresh.strat
 import { UsersModule } from "../users/users.module";
 import { AuthenticationService } from "./authentication.service";
 import { AuthenticationController } from "./authentication.controller";
+import { EmailVerificationModule } from "../email/email-verification.module";
 
 @Module({
-  imports: [UsersModule, PassportModule, JwtModule.register({})],
+  imports: [
+    UsersModule,
+    PassportModule,
+    JwtModule.register({}),
+    EmailVerificationModule,
+  ],
   providers: [
     AuthenticationService,
     LocalStrategy,

@@ -123,7 +123,7 @@ bootstrap();
 npm run start:dev
 ```
 
-## Push to github.
+## Push to Github
 
 ```
 git add .
@@ -300,7 +300,7 @@ import { AuthenticationService } from "./authentication.service";
 export class AuthenticationModule {}
 ```
 
-**Do not forget to add module to AppModule's imports array.**
+**Do not forget to add AuthenticationModule to AppModule imports array.**
 
 ## SERVICE
 
@@ -393,7 +393,7 @@ export class LocalStrategy extends PassportStrategy(Strategy, "local") {
 }
 ```
 
-Add PassportModule to AuthenticationModule's imports array. And add LocalStrategy to AuthenticationModule's providers array.
+Add PassportModule to AuthenticationModule imports array. And add LocalStrategy to AuthenticationModule providers array.
 
 ```
 import { PassportModule } from "@nestjs/passport";
@@ -481,7 +481,7 @@ export class AuthenticationController {
 }
 ```
 
-**Do not forget to add controller to AuthenticationModule's controllers array.**
+**Do not forget to add AuthenticationController to AuthenticationModule controllers array.**
 
 ## Test with Postman
 
@@ -528,7 +528,7 @@ export class AppModule {}
 
 ## Generating Tokens
 
-In order to create JWT we will need access to JwtService. And to get access to it, we need to add JwtModule to AuthenticationModule's imports array.
+In order to create JWT we will need access to JwtService. And to get access to it, we need to add JwtModule to AuthenticationModule imports array.
 
 **authentication/authentication.module.ts**
 
@@ -656,7 +656,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
 }
 ```
 
-Add JwtStrategy to AuthenticationModule's providers array.
+Add JwtStrategy to AuthenticationModule providers array.
 
 **authentication/authentication.module.ts**
 
@@ -878,7 +878,7 @@ export class JwtRefreshTokenStrategy extends PassportStrategy(
 }
 ```
 
-Add JwtRefreshTokenStrategy to AuthenticationModule's providers array.
+Add JwtRefreshTokenStrategy to AuthenticationModule providers array.
 
 **authentication/authentication.module.ts**
 
@@ -999,5 +999,149 @@ export class UsersService {
 ## Test with Postman
 
 Change the JWT_ACCESS_TOKEN_EXPIRATION_TIME and JWT_REFRESH_TOKEN_EXPIRATION_TIME for testing to see Passport strategies in action.
+
+## Push to Github
+
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - EMAIL VERIFICATION
+
+**EMAIL**
+
+Create email folder inside the accounts folder.
+We will use Nodemailer for sending emails. Check this StackOverflow post for: [enabling less secure app access with Google, when using Nodemailer](https://stackoverflow.com/questions/72530276/how-to-send-emails-with-google-using-nodemailer-after-google-disabled-less-sure).
+
+```
+npm install nodemailer
+
+npm install -D @types/nodemailer
+```
+
+We will three new environment variables provided by gmail, when you enable less secure apps.
+
+**.env**
+
+```
+EMAIL_SERVICE=gmail
+EMAIL_USER
+EMAIL_PASSWORD
+```
+
+**app.module.ts**
+
+```
+@Module({
+  imports: [
+      validationSchema: Joi.object({
+        ...
+        EMAIL_SERVICE: Joi.string().required(),
+        EMAIL_USER: Joi.string().required(),
+        EMAIL_PASSWORD: Joi.string().required(),
+      }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+## Nodemailer set up
+
+We will set up NodemailerModule as dynamic module. What we used so far, with modules we created were static modules.
+We need dynamic module, because we want NodemailerModule to be customized by consuming modules. First one being EmailVerificationModule.
+Great explanation can be found in NestJs documentation: [Dynamic module](https://docs.nestjs.com/fundamentals/dynamic-modules#dynamic-module-use-case).
+We will follow [Configurable module builder](https://docs.nestjs.com/fundamentals/dynamic-modules#configurable-module-builder) when building our dynamic module.
+
+**email/nodemailer-options.interface**
+
+```
+export interface NodemailerOptionsInterface {
+  service: string;
+  user: string;
+  password: string;
+}
+```
+
+**nodemailer.module-definition.ts**
+
+```
+import { ConfigurableModuleBuilder } from "@nestjs/common";
+import { NodemailerOptionsInterface } from "./nodemailer-options.interface";
+
+export const {
+  ConfigurableModuleClass: ConfigurableEmailModule,
+  MODULE_OPTIONS_TOKEN: EMAIL_CONFIG_OPTIONS,
+} = new ConfigurableModuleBuilder<NodemailerOptionsInterface>().build();
+```
+
+**nodemailer.module.ts**
+
+```
+import { Module } from "@nestjs/common";
+import { ConfigurableEmailModule } from "./nodemailer.module-definition";
+import { NodemailerService } from "./nodemailer.service";
+
+@Module({
+  providers: [NodemailerService],
+  exports: [NodemailerService],
+})
+export class NodemailerModule extends ConfigurableEmailModule {}
+```
+
+**nodemailer.service.ts**
+
+```
+import { Inject, Injectable } from "@nestjs/common";
+import { EMAIL_CONFIG_OPTIONS } from "./nodemailer.module-definition";
+import { NodemailerOptionsInterface } from "./nodemailer-options.interface";
+import * as Mail from "nodemailer/lib/mailer";
+import { createTransport } from "nodemailer";
+
+@Injectable()
+export class NodemailerService {
+  private nodemailerTransport: Mail;
+
+  constructor(
+    @Inject(EMAIL_CONFIG_OPTIONS) private options: NodemailerOptionsInterface,
+  ) {
+    this.nodemailerTransport = createTransport({
+      service: options.service,
+      auth: {
+        user: options.user,
+        pass: options.password,
+      },
+    });
+  }
+
+  sendMail(options: Mail.Options) {
+    return this.nodemailerTransport.sendMail(options);
+  }
+}
+```
+
+## Email verification
+
+To check if we have properly added everything for Nodemailer, we will try our dynamic configuration, by creating first consumer EmailVerificationModule.
+
+**email/email-verification.module.ts**
+
+```
+import { Module } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { NodemailerModule } from "./nodemailer.module";
+
+@Module({
+  imports: [
+    NodemailerModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        service: configService.get("EMAIL_SERVICE"),
+        user: configService.get("EMAIL_USER"),
+        password: configService.get("EMAIL_PASSWORD"),
+      }),
+    }),
+  ],
+})
+export class EmailVerificationModule {}
+```
+
+**Do not forget to add EmailVerificationModule to AuthenticationModule import array.**
 
 ## Push to Github
