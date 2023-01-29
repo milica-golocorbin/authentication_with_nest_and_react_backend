@@ -10,6 +10,7 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { AuthenticationService } from "./authentication.service";
+import { EmailVerificationService } from "./../email/email-verification.service";
 import { UsersService } from "../users/users.service";
 import { RegisterUserDto } from "./register-user.dto";
 import { RequestWithUser } from "./request-with-user.interface";
@@ -22,12 +23,17 @@ import { JwtRefreshAuthenticationGuard } from "./passport/guards/jwt-refresh-aut
 export class AuthenticationController {
   constructor(
     readonly authenticationService: AuthenticationService,
+    readonly emailVerificationService: EmailVerificationService,
     readonly usersService: UsersService,
   ) {}
 
   @Post("register")
   async register(@Body() registerUserDto: RegisterUserDto) {
-    return this.authenticationService.registerUser(registerUserDto);
+    const user = await this.authenticationService.registerUser(registerUserDto);
+    await this.emailVerificationService.sendVerificationLink(
+      registerUserDto.email,
+    );
+    return { user, message: "Visit email to verify your account." };
   }
 
   @UseGuards(LocalAuthenticationGuard)

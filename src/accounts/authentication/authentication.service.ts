@@ -19,7 +19,6 @@ export class AuthenticationService {
     const user = await this.usersService.getUserByEmail(registerUserDto.email);
 
     if (!user?.hasOwnProperty("email")) {
-      // TODO: SENDING VERIFICATION LINK BEFORE SAVING USER
       return this.usersService.createUser(registerUserDto);
     } else {
       throw new HttpException(

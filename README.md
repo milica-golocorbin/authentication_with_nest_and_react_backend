@@ -327,7 +327,6 @@ export class AuthenticationService {
     const user = await this.usersService.getUserByEmail(registerUserDto.email);
 
     if (!user?.hasOwnProperty("email")) {
-      // TODO: SENDING VERIFICATION LINK BEFORE SAVING USER
       return this.usersService.createUser(registerUserDto);
     } else {
       throw new HttpException(
@@ -1002,7 +1001,7 @@ Change the JWT_ACCESS_TOKEN_EXPIRATION_TIME and JWT_REFRESH_TOKEN_EXPIRATION_TIM
 
 ## Push to Github
 
-# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - EMAIL VERIFICATION
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - NODEMAILER
 
 **EMAIL**
 
@@ -1143,5 +1142,139 @@ export class EmailVerificationModule {}
 ```
 
 **Do not forget to add EmailVerificationModule to AuthenticationModule import array.**
+
+## Push to Github
+
+# Authentication API (NestJS, TypeORM, PostgreSQL, TS) - EMAIL VERIFICATION
+
+When we created User entity, we added isVerified field and set it to false by default.
+When user enters his details for registration, we will return user a message, an URL containing the JWT. In order to proceed with logging in process, user need to visit email address and open link we sent.
+To do that, we will add three new environment variables to .env file. We will use: **crypto.randomBytes(32).toString("hex")** to generate random key for JWT_VERIFICATION_TOKEN_SECRET. We will set JWT_VERIFICATION_TOKEN_EXPIRATION_TIME to 21600s (6 days). And we will set EMAIL_VERIFICATION_URL to our frontend route.
+
+**.env**
+
+```
+JWT_VERIFICATION_TOKEN_SECRET
+JWT_VERIFICATION_TOKEN_EXPIRATION_TIME=21600 #6h
+EMAIL_VERIFICATION_URL=http://localhost:5173/auth/verify-email
+```
+
+**app.module.ts**
+
+```
+@Module({
+  imports: [
+      validationSchema: Joi.object({
+        ...
+        JWT_VERIFICATION_TOKEN_SECRET: Joi.string().required(),
+        JWT_VERIFICATION_TOKEN_EXPIRATION_TIME: Joi.string().required(),
+        EMAIL_VERIFICATION_URL: Joi.string().required(),
+      }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+## Send verification link
+
+In previous blog we added EmailVerificationModule to check if we connected everything properly with Nodemailer. Now we'll create EmailVerificationService and add method for sending emails.
+
+**email-verification.service.ts**
+
+```
+import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { JwtService } from "@nestjs/jwt";
+import { NodemailerService } from "./nodemailer.service";
+
+@Injectable()
+export class EmailVerificationService {
+  constructor(
+    private configService: ConfigService,
+    private nodemailerService: NodemailerService,
+    private jwtService: JwtService,
+  ) {}
+
+  public sendVerificationLink(email: string) {
+    const payload = { email };
+
+    const token = this.jwtService.sign(payload, {
+      secret: this.configService.get("JWT_VERIFICATION_TOKEN_SECRET"),
+      expiresIn: `${this.configService.get(
+        "JWT_VERIFICATION_TOKEN_EXPIRATION_TIME",
+      )}s`,
+    });
+
+    const url = `${this.configService.get(
+      "EMAIL_VERIFICATION_URL",
+    )}?token=${token}`;
+
+    const text = `Welcome to the application. To confirm the email address, click here: ${url}`;
+
+    return this.nodemailerService.sendMail({
+      to: email,
+      subject: "Email Verification",
+      text,
+    });
+  }
+}
+```
+
+**email/email-verification.module.ts**
+
+```
+import { JwtModule } from "@nestjs/jwt";
+import { EmailVerificationService } from "./email-verification.service";
+
+@Module({
+  imports: [JwtModule.register({})],
+  providers: [EmailVerificationService],
+  exports: [EmailVerificationService],
+})
+export class EmailVerificationModule {}
+```
+
+**authentication/authentication.controller.ts**
+
+We'll modify our register method.
+
+```
+import { EmailVerificationService } from "./../email/email-verification.service";
+
+@UseInterceptors(ClassSerializerInterceptor)
+@Controller("auth")
+export class AuthenticationController {
+  constructor(
+    readonly emailVerificationService: EmailVerificationService,
+  ) {}
+
+  @Post("register")
+  async register(@Body() registerUserDto: RegisterUserDto) {
+    const user = await this.authenticationService.registerUser(registerUserDto);
+    await this.emailVerificationService.sendVerificationLink(
+      registerUserDto.email,
+    );
+    return { user, message: "Visit email to verify your account." };
+  }
+```
+
+# Confirming email address
+
+When user clicks on the link from the email, our frontend application needs to get the token from the URL and send it to our API. For that, we need to create a new controller.
+
+**email/email-verification.controller.ts**
+
+```
+import { Controller } from "@nestjs/common/decorators";
+import { EmailVerificationService } from "./email-verification.service";
+
+@Controller("email-verification")
+export class EmailVerificationController {
+  readonly emailVerificationService: EmailVerificationService;
+}
+```
+
+**Do not forget to add EmailVerificationController to EmailVerificationModule controllers array.**
 
 ## Push to Github

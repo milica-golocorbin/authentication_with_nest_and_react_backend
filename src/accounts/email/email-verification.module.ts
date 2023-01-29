@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NodemailerModule } from "./nodemailer.module";
+import { JwtModule } from "@nestjs/jwt";
+import { EmailVerificationService } from "./email-verification.service";
+import { EmailVerificationController } from "./email-verification.controller";
 
 @Module({
   imports: [
@@ -12,6 +15,10 @@ import { NodemailerModule } from "./nodemailer.module";
         password: configService.get("EMAIL_PASSWORD"),
       }),
     }),
+    JwtModule.register({}),
   ],
+  providers: [EmailVerificationService],
+  exports: [EmailVerificationService],
+  controllers: [EmailVerificationController],
 })
 export class EmailVerificationModule {}
