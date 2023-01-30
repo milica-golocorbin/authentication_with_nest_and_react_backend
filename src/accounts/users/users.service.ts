@@ -2,7 +2,7 @@ import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { User } from "./user.entity";
-import { CreateUserDto } from "./create-user.dto";
+import { UserCreateDto } from "./user-create.dto";
 import * as bcrypt from "bcrypt";
 
 @Injectable()
@@ -39,10 +39,10 @@ export class UsersService {
   // READING DATABASE
 
   // CREATE - SAVING TO DATABASE METHODS
-  async createUser(createUserDto: CreateUserDto): Promise<User> {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+  async createUser(userCreateDto: UserCreateDto): Promise<User> {
+    const hashedPassword = await bcrypt.hash(userCreateDto.password, 10);
     const newUser = this.usersRepo.create({
-      ...createUserDto,
+      ...userCreateDto,
       password: hashedPassword,
     });
     // Saves a entity in the database. If entity does not exist in the database then inserts, otherwise updates.
@@ -64,6 +64,15 @@ export class UsersService {
     return await this.usersRepo.update(userId, {
       refreshJwtToken: null,
     });
+  }
+
+  async markEmailAsVerified(email: string) {
+    return await this.usersRepo.update(
+      { email },
+      {
+        isVerified: true,
+      },
+    );
   }
   //UPDATING DATABASE
 }

@@ -233,7 +233,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { User } from "./user.entity";
-import { CreateUserDto } from "./create-user.dto";
+import { UserCreateDto } from "./user-create.dto";
 import * as bcrypt from "bcrypt";
 
 @Injectable()
@@ -244,10 +244,10 @@ export class UsersService {
     return await this.usersRepo.findOne({ where: { email } });
   }
 
-  async createUser(createUserDto: CreateUserDto): Promise<User> {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+  async createUser(userCreateDto: UserCreateDto): Promise<User> {
+    const hashedPassword = await bcrypt.hash(userCreateDto.password, 10);
     const newUser = this.usersRepo.create({
-      ...createUserDto,
+      ...userCreateDto,
       password: hashedPassword,
     });
     return await this.usersRepo.save(newUser);
@@ -262,7 +262,7 @@ export class UsersService {
 ```
 import { IsEmail, IsString, MaxLength, MinLength } from "class-validator";
 
-export class CreateUserDto {
+export class UserCreateDto {
   @IsString()
   @MinLength(4)
   @MaxLength(16)
@@ -1058,7 +1058,7 @@ export interface NodemailerOptionsInterface {
 }
 ```
 
-**nodemailer.module-definition.ts**
+**email/nodemailer.module-definition.ts**
 
 ```
 import { ConfigurableModuleBuilder } from "@nestjs/common";
@@ -1070,7 +1070,7 @@ export const {
 } = new ConfigurableModuleBuilder<NodemailerOptionsInterface>().build();
 ```
 
-**nodemailer.module.ts**
+**email/nodemailer.module.ts**
 
 ```
 import { Module } from "@nestjs/common";
@@ -1084,7 +1084,7 @@ import { NodemailerService } from "./nodemailer.service";
 export class NodemailerModule extends ConfigurableEmailModule {}
 ```
 
-**nodemailer.service.ts**
+**email/nodemailer.service.ts**
 
 ```
 import { Inject, Injectable } from "@nestjs/common";
@@ -1180,7 +1180,7 @@ export class AppModule {}
 
 In previous blog we added EmailVerificationModule to check if we connected everything properly with Nodemailer. Now we'll create EmailVerificationService and add method for sending emails.
 
-**email-verification.service.ts**
+**email/email-verification.service.ts**
 
 ```
 import { Injectable } from "@nestjs/common";
@@ -1210,7 +1210,7 @@ export class EmailVerificationService {
       "EMAIL_VERIFICATION_URL",
     )}?token=${token}`;
 
-    const text = `Welcome to the application. To confirm the email address, click here: ${url}`;
+    const text = `Welcome to the application. To verify the email address, click here: ${url}`;
 
     return this.nodemailerService.sendMail({
       to: email,
@@ -1261,20 +1261,232 @@ export class AuthenticationController {
 
 # Confirming email address
 
-When user clicks on the link from the email, our frontend application needs to get the token from the URL and send it to our API. For that, we need to create a new controller.
+When a user clicks on the link from the email, our frontend application needs to get the token from the URL and send it to our API. For that, we need to create a new controller. Verify endpoint will receive encoded token, so we will need to decode it first, hence decodeVerificationToken in EmailVerificationService and we wil need new DTO. If everything is OK, we will get email address, with which we will call verifyEmail method in our EmailVerificationService in order to change isVerified field in our users table. Therefore, will need markEmailAsVerified method in our UsersService.
 
 **email/email-verification.controller.ts**
 
 ```
 import { Controller } from "@nestjs/common/decorators";
 import { EmailVerificationService } from "./email-verification.service";
+import { EmailVerifyDto } from "./email-verification.dto";
 
 @Controller("email-verification")
 export class EmailVerificationController {
   readonly emailVerificationService: EmailVerificationService;
+
+  @Post("verify")
+  async verify(@Body() emailVerifyDto: EmailVerifyDto) {
+    const email: string =
+      await this.emailVerificationService.decodeVerificationToken(
+        emailVerifyDto.token,
+      );
+    await this.emailVerificationService.verifyEmail(email);
+  }
 }
 ```
 
 **Do not forget to add EmailVerificationController to EmailVerificationModule controllers array.**
+
+**email/email-verification.service.ts**
+
+```
+import { BadRequestException } from "@nestjs/common";
+
+@Injectable()
+export class EmailVerificationService {
+
+  public async decodeVerificationToken(token: string) {
+    try {
+      const payload = await this.jwtService.verify(token, {
+        secret: this.configService.get("JWT_VERIFICATION_TOKEN_SECRET"),
+      });
+      if (payload.hasOwnProperty("email")) {
+        return payload.email;
+      }
+      throw new BadRequestException();
+    } catch (error) {
+      if (error?.name === "TokenExpiredError") {
+        throw new BadRequestException("Email verification token expired.");
+      }
+      throw new BadRequestException("Bad verification token.");
+    }
+  }
+}
+```
+
+**email/verify-email.dto**
+
+```
+import { IsNotEmpty, IsString } from "class-validator";
+
+export class EmailVerifyDto {
+  @IsString()
+  @IsNotEmpty()
+  token: string;
+}
+```
+
+**email/email-verification.service.ts**
+
+Because we will use UsersService in our EmailVerificationService, we have to add UsersModule to our EmailVerificationModule imports array.
+
+```
+import { UsersService } from "./../users/users.service";
+
+@Injectable()
+export class EmailVerificationService {
+  constructor(
+    private usersService: UsersService,
+  ) {}
+
+  public async verifyEmail(email: string) {
+    const user = await this.usersService.getUserByEmail(email);
+    if (user.isVerified) {
+      throw new BadRequestException("Email already verified.");
+    }
+    await this.usersService.markEmailAsVerified(email);
+  }
+}
+```
+
+**users/users.service.ts**
+
+```
+@Injectable()
+export class UsersService {
+
+  ...
+  async markEmailAsVerified(email: string) {
+    return await this.usersRepo.update(
+      { email },
+      {
+        isVerified: true,
+      },
+    );
+  }
+}
+```
+
+## Resending verification link
+
+Since we set an expiration time for our tokens, the user might not use the token on time. Therefore, we should implement a feature of resending the link.
+
+**email/email-verification.service.ts**
+
+```
+@Injectable()
+export class EmailVerificationService {
+
+  ...
+  public async resendVerificationLink(userId: number) {
+    const user = await this.usersService.getUserById(userId);
+    if (user.isVerified) {
+      throw new BadRequestException("Email already verified.");
+    }
+    await this.sendVerificationLink(user.email);
+  }
+}
+```
+
+**email/email-verification.controller.ts**
+
+We require the user to authenticate before resending the verification link.
+
+```
+import { ClassSerializerInterceptor, Req, UseGuards, UseInterceptors } from "@nestjs/common";
+import { RequestWithUser } from "../authentication/request-with-user.interface";
+import { JwtAuthenticationGuard } from "../authentication/passport/guards/jwt-authentication.guard";
+
+@Controller("email-verification")
+export class EmailVerificationController {
+
+  ...
+  @UseGuards(JwtAuthenticationGuard)
+  @Post("resend")
+  async resend(@Req() request: RequestWithUser) {
+    await this.emailVerificationService.resendVerificationLink(request.user.id);
+  }
+}
+```
+
+## Email verification guard
+
+**email/email-verification.guard.ts**
+
+```
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  UnauthorizedException,
+} from "@nestjs/common";
+import { RequestWithUser } from "../authentication/request-with-user.interface";
+
+@Injectable()
+export class EmailVerificationGuard implements CanActivate {
+  canActivate(context: ExecutionContext) {
+    const request: RequestWithUser = context.switchToHttp().getRequest();
+
+    if (!request.user?.isVerified) {
+      throw new UnauthorizedException("Verify your email first.");
+    }
+
+    return true;
+  }
+}
+```
+
+## Basic role-based access control
+
+When it comes to authorization, by now we only implemented guards, that would restrict unauthenticated users. What we want to add now are two basic roles **user** and **admin**. Where a user will only have read permissions, and the admin will have all the permissions.
+
+**users/user.enum.ts**
+
+```
+export enum Role {
+  USER = "user",
+  ADMIN = "admin",
+}
+```
+
+**users/user.entity.ts**
+
+Add new column, role.
+
+```
+import { Role } from "./role.enum";
+
+@Entity("users")
+export class User {
+
+...
+@Column({ type: "enum", enum: Role, default: Role.USER })
+public role: Role;
+...
+}
+```
+
+**users/role.guard.ts**
+
+```
+import { Role } from "./role.enum";
+import { CanActivate, ExecutionContext, mixin, Type } from "@nestjs/common";
+import { RequestWithUser } from "../authentication/request-with-user.interface";
+
+export const RoleGuard = (role: Role): Type<CanActivate> => {
+  class RoleGuardMixin implements CanActivate {
+    canActivate(context: ExecutionContext) {
+      const request = context.switchToHttp().getRequest<RequestWithUser>();
+      const user = request.user;
+
+      return user?.role === role;
+    }
+  }
+
+  return mixin(RoleGuardMixin);
+}
+```
+
+**This finishes our basic authentication for now. We will move to the frontend next to create UI, for all the logic we implemented so far on the backend. We will probably return to the server to tweak, mostly our responses, and add messages where deemed necessary.**
 
 ## Push to Github

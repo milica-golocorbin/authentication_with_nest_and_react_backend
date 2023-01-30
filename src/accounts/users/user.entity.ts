@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { Exclude } from "class-transformer";
+import { Role } from "./role.enum";
 
 @Entity("users")
 export class User {
@@ -30,6 +31,9 @@ export class User {
 
   @Column({ name: "is_verified", default: false })
   public isVerified: boolean;
+
+  @Column({ type: "enum", enum: Role, default: Role.USER })
+  public role: Role;
 
   @CreateDateColumn({ name: "created_at" })
   public createdAt: Date;

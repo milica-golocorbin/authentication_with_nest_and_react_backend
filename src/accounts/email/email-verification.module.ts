@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NodemailerModule } from "./nodemailer.module";
 import { JwtModule } from "@nestjs/jwt";
+import { UsersModule } from "../users/users.module";
 import { EmailVerificationService } from "./email-verification.service";
 import { EmailVerificationController } from "./email-verification.controller";
 
@@ -16,6 +17,7 @@ import { EmailVerificationController } from "./email-verification.controller";
       }),
     }),
     JwtModule.register({}),
+    UsersModule,
   ],
   providers: [EmailVerificationService],
   exports: [EmailVerificationService],
